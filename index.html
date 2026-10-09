@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pocket Tracker</title>
+<style>
+:root{--bg:#14161c;--card:#1e222b;--tx:#e8eaf0;--mut:#8b93a5;--ok:#3ecf8e}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px system-ui,sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 16px;border-bottom:1px solid #2a2f3a;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+select,input,button{background:var(--card);color:var(--tx);border:1px solid #2f3542;border-radius:8px;padding:8px 10px;font:inherit}
+button{cursor:pointer}
+#bar{flex:1 1 100%;height:8px;background:var(--card);border-radius:4px;overflow:hidden}
+#bar i{display:block;height:100%;width:0;background:var(--ok);transition:width .2s}
+#info{flex:1 1 100%;color:var(--mut);font-size:13px}
+main{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px;padding:16px}
+.c{position:relative;background:var(--card);border-radius:10px;overflow:hidden;cursor:pointer;user-select:none}
+.c img{display:block;width:100%;aspect-ratio:245/337;object-fit:cover;background:#2a2f3a}
+.c.m img{filter:grayscale(1) brightness(.45)}
+.c small{display:block;padding:4px 6px;color:var(--mut);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.n{position:absolute;top:6px;right:6px;background:var(--ok);color:#06210f;font-weight:700;border-radius:999px;padding:1px 8px;font-size:13px}
+.d{position:absolute;top:6px;left:6px;padding:0 9px;border-radius:999px;font-weight:700;line-height:1.5}
+</style>
+</head>
+<body>
+<header>
+  <select id="set"></select>
+  <input id="q" type="search" placeholder="Buscar nombre o nº…">
+  <select id="f"><option value="all">Todas</option><option value="own">Las tengo</option><option value="miss">Me faltan</option></select>
+  <select id="r"><option value="">Todas las rarezas</option></select>
+  <select id="l"><option value="es">Español</option><option value="en">English</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="it">Italiano</option></select>
+  <button id="ex">Exportar</button><button id="im">Importar</button><input id="file" type="file" accept=".json" hidden>
+  <div id="bar"><i></i></div>
+  <div id="info"></div>
+</header>
+<main id="grid"></main>
+
+<script>
+const API = 'https://api.tcgdex.net/v2/';
+const $ = s => document.querySelector(s);
+const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d } catch { return d } };
+const put = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)) } catch {} };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const getJ = async u => { const r = await fetch(u); if (!r.ok) throw Error(r.status); return r.json() };
+
+let own = load('pt.own', {});   // { "A1-001": copias }
+let rar = load('pt.rar', {});   // { "A1-001": "One Diamond" }
+let lang = load('pt.lang', 'es');
+let sets = [], cards = [], cur = '';
+
+const NUM = { one: 1, two: 2, three: 3, four: 4 };
+function sym(r) {
+  if (!r) return '';
+  let m = r.match(/(one|two|three|four)\s+diamond/i); if (m) return '♢'.repeat(NUM[m[1].toLowerCase()]);
+  m = r.match(/(one|two|three)\s+star/i); if (m) return '☆'.repeat(NUM[m[1].toLowerCase()]);
+  return r;
+}
+const ownedIn = id => Object.keys(own).filter(k => k.startsWith(id + '-') && own[k] > 0).length;
+
+function fillSets() {
+  const v = $('#set').value || cur;
+  $('#set').innerHTML = sets.map(s => `<option value="${esc(s.id)}">${esc(s.name)} (${ownedIn(s.id)}/${s.cardCount?.total ?? '?'})</option>`).join('');
+  if (v) $('#set').value = v;
+}
+
+function buildRar() {
+  const prev = $('#r').value;
+  const list = [...new Set(cards.map(c => rar[c.id]).filter(Boolean))];
+  $('#r').innerHTML = '<option value="">Todas las rarezas</option>' + list.map(r => `<option value="${esc(r)}">${esc(sym(r))} ${esc(r)}</option>`).join('');
+  $('#r').value = list.includes(prev) ? prev : '';
+}
+
+function render() {
+  const q = $('#q').value.toLowerCase(), f = $('#f').value, r = $('#r').value;
+  const list = cards.filter(c =>
+    (!q || c.n.toLowerCase().includes(q) || c.id.toLowerCase().includes(q)) &&
+    (f === 'all' || (f === 'own') === (own[c.id] > 0)) &&
+    (!r || rar[c.id] === r));
+  $('#grid').innerHTML = list.map(c => {
+    const n = own[c.id] || 0;
+    return `<div class="c${n ? '' : ' m'}" data-id="${esc(c.id)}">` +
+      (c.i ? `<img loading="lazy" src="${esc(c.i)}/low.webp" alt="${esc(c.n)}">` : '<img alt="">') +
+      (n ? `<span class="n">×${n}</span><button class="d" data-d="1">−</button>` : '') +
+      `<small>${esc(c.id.split('-').pop())} ${esc(c.n)} ${esc(sym(rar[c.id]))}</small></div>`;
+  }).join('');
+  const tot = cards.length, have = cards.filter(c => own[c.id] > 0).length, pct = tot ? Math.round(have / tot * 100) : 0;
+  $('#bar i').style.width = pct + '%';
+  $('#info').textContent = `${have}/${tot} cartas (${pct}%) · mostrando ${list.length}`;
+  fillSets();
+}
+
+async function loadRar() {
+  const todo = cards.map(c => c.id).filter(i => !rar[i]);
+  let k = 0, done = 0;
+  await Promise.all(Array.from({ length: 6 }, async () => {
+    while (k < todo.length) {
+      const id = todo[k++];
+      try { rar[id] = (await getJ(`${API}en/cards/${id}`)).rarity || '-'; } catch {}
+      if (++done % 20 === 0) $('#info').textContent = `Cargando rarezas ${done}/${todo.length}…`;
+    }
+  }));
+  put('pt.rar', rar); buildRar(); render();
+}
+
+async function openSet(id) {
+  cur = id; $('#info').textContent = 'Cargando…';
+  const key = `pt.set.${lang}.${id}`;
+  let s = load(key, null);
+  if (!s) {
+    const d = await getJ(`${API}${lang}/sets/${id}`);
+    s = { cards: d.cards.map(c => ({ id: c.id, n: c.name, i: c.image })) };
+    put(key, s);
+  }
+  cards = s.cards; buildRar(); render(); loadRar();
+}
+
+async function init() {
+  $('#l').value = lang;
+  try { sets = (await getJ(`${API}${lang}/series/tcgp`)).sets; }
+  catch (e) { $('#info').textContent = 'No se pudo cargar la API: ' + e.message; return; }
+  fillSets(); await openSet($('#set').value);
+}
+
+$('#grid').onclick = e => {
+  const el = e.target.closest('.c'); if (!el) return;
+  const id = el.dataset.id;
+  own[id] = Math.max(0, (own[id] || 0) + (e.target.dataset.d ? -1 : 1));
+  if (!own[id]) delete own[id];
+  put('pt.own', own); render();
+};
+$('#set').onchange = e => openSet(e.target.value);
+$('#q').oninput = $('#f').onchange = $('#r').onchange = render;
+$('#l').onchange = e => { lang = e.target.value; put('pt.lang', lang); init(); };
+$('#ex').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(own)], { type: 'application/json' }));
+  a.download = 'pocket-collection.json'; a.click();
+};
+$('#im').onclick = () => $('#file').click();
+$('#file').onchange = async e => {
+  try { const d = JSON.parse(await e.target.files[0].text()); if (typeof d !== 'object' || !d) throw 0; own = d; put('pt.own', own); render(); }
+  catch { alert('Archivo no válido'); }
+};
+init();
+</script>
+</body>
+</html>
